@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: scout-db
+    environment:
+      POSTGRES_USER: scout
+      POSTGRES_PASSWORD: scout
+      POSTGRES_DB: scout
+    ports:
+      - "5432:5432"
+    volumes:
+      - scout-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scout"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      target: base
+    container_name: scout-backend
+    environment:
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - DATABASE_URL=postgresql+asyncpg://scout:scout@db:5432/scout
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT:-prj-cts-lab-vertex-sandbox}
+      - GOOGLE_CLOUD_REGION=${GOOGLE_CLOUD_REGION:-us-east1}
+      - BRAVE_SEARCH_API_KEY=${BRAVE_SEARCH_API_KEY:-}
+      - JWT_SECRET=${JWT_SECRET:-dev-secret-change-me}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - ~/.config/gcloud:/root/.config/gcloud:ro  # For Vertex AI auth
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: scout-frontend
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    command: npm run dev
+    depends_on:
+      - backend
+
+volumes:
+  scout-postgres-data:

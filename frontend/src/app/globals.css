@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --scout-primary: #6366f1;
+  --scout-secondary: #8b5cf6;
+  --aqua: #00CED1;
+  --gold: #FFD700;
+}
+
+body {
+  @apply bg-void-900 text-white antialiased;
+}
+
+/* Custom utilities */
+.glass {
+  @apply bg-white/5 backdrop-blur-xl border border-white/10;
+}
+
+.glow-aqua {
+  box-shadow: 0 0 20px rgba(0, 206, 209, 0.3);
+}
+
+.glow-indigo {
+  box-shadow: 0 0 20px rgba(99, 102, 241, 0.3);
+}
