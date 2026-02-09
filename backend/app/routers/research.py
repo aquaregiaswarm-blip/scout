@@ -1,6 +1,7 @@
 """Research API endpoints."""
 
 import uuid
+import asyncio
 from datetime import datetime, timezone
 from typing import AsyncGenerator
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
@@ -10,7 +11,7 @@ from sqlalchemy import select
 import structlog
 import json
 
-from app.db.database import get_db
+from app.db.database import get_db, AsyncSessionLocal
 from app.db import tables
 from app.models.research import (
     StartResearchRequest,
@@ -20,7 +21,8 @@ from app.models.research import (
     DashboardContentResponse,
     ResearchStatus,
 )
-# from app.services.research_service import ResearchService
+from app.services.research_service import ResearchService
+from app.streams.sse import sse_manager, create_event_callback, format_sse_message
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -83,10 +85,14 @@ async def start_research(
     await db.commit()
 
     # Start research in background
-    # background_tasks.add_task(
-    #     ResearchService(db).run_research,
-    #     session.id,
-    # )
+    async def run_research_task():
+        """Run research with a new database session."""
+        async with AsyncSessionLocal() as task_db:
+            service = ResearchService(task_db)
+            event_callback = await create_event_callback(session.id)
+            await service.run_research(session.id, event_callback)
+    
+    background_tasks.add_task(asyncio.create_task, run_research_task())
 
     return StartResearchResponse(
         session_id=session.id,
@@ -216,18 +222,56 @@ async def stream_research(
     db: AsyncSession = Depends(get_db),
 ):
     """Stream research events via SSE."""
+    
+    # Verify session exists
+    result = await db.execute(
+        select(tables.ResearchSession).where(tables.ResearchSession.id == session_id)
+    )
+    session = result.scalar_one_or_none()
+    
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
 
     async def event_generator() -> AsyncGenerator[str, None]:
         """Generate SSE events."""
-        # Placeholder - will be replaced with actual event streaming
-        yield f"data: {json.dumps({'type': 'connected', 'session_id': session_id})}\n\n"
-
-        # In production, this would listen to a Redis pub/sub or similar
-        # For now, just send a heartbeat
-        import asyncio
-        for _ in range(300):  # 5 minutes max
-            await asyncio.sleep(10)
-            yield f"data: {json.dumps({'type': 'heartbeat', 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
+        # Subscribe to session events
+        queue = await sse_manager.subscribe(session_id)
+        
+        try:
+            # Send connected event
+            yield format_sse_message({
+                "type": "connected",
+                "session_id": session_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            
+            # Stream events from queue
+            timeout = 300  # 5 minutes max
+            start_time = asyncio.get_event_loop().time()
+            
+            while True:
+                elapsed = asyncio.get_event_loop().time() - start_time
+                if elapsed >= timeout:
+                    break
+                
+                try:
+                    # Wait for event with timeout for heartbeat
+                    event = await asyncio.wait_for(queue.get(), timeout=30)
+                    yield format_sse_message(event)
+                    
+                    # Check if research is complete
+                    if event.get("type") in ("research_complete", "error"):
+                        break
+                        
+                except asyncio.TimeoutError:
+                    # Send heartbeat
+                    yield format_sse_message({
+                        "type": "heartbeat",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
+        
+        finally:
+            await sse_manager.unsubscribe(session_id, queue)
 
     return StreamingResponse(
         event_generator(),

@@ -23,6 +23,15 @@ class Settings(BaseSettings):
     google_cloud_region: str = "us-east1"
     claude_model: str = "claude-sonnet-4@20250514"
     
+    # Aliases for compatibility
+    @property
+    def gcp_project_id(self) -> str:
+        return self.google_cloud_project
+    
+    @property
+    def vertex_ai_region(self) -> str:
+        return self.google_cloud_region
+    
     # Brave Search
     brave_search_api_key: str = ""
     
