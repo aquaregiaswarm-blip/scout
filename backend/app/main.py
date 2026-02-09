@@ -85,8 +85,13 @@ async def readiness_check():
 
 
 # Import and include routers
-# from app.routers import research, companies, portfolio, auth
-# app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
-# app.include_router(research.router, prefix="/api/v1/research", tags=["research"])
-# app.include_router(companies.router, prefix="/api/v1/companies", tags=["companies"])
-# app.include_router(portfolio.router, prefix="/api/v1/portfolio", tags=["portfolio"])
+from app.routers import research_router, companies_router, portfolio_router, auth_router
+
+app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
+app.include_router(research_router, prefix="/api/v1/research", tags=["research"])
+app.include_router(companies_router, prefix="/api/v1/companies", tags=["companies"])
+app.include_router(portfolio_router, prefix="/api/v1/portfolio", tags=["portfolio"])
+
+# Also add initiative dashboard endpoint at the expected path
+from app.routers.companies import get_initiative_dashboard
+app.add_api_route("/api/v1/initiatives/{initiative_id}/dashboard", get_initiative_dashboard, methods=["GET"], tags=["initiatives"])

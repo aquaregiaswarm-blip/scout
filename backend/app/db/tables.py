@@ -134,7 +134,7 @@ class ResearchSession(Base):
     
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     initiative_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("initiatives.id"), nullable=False)
-    triggered_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    triggered_by: Mapped[str] = mapped_column(String(100), nullable=False)  # "user", "follow_up", "refresh", or user_id
     status: Mapped[ResearchStatus] = mapped_column(Enum(ResearchStatus), default=ResearchStatus.PENDING)
     follow_up_question: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
