@@ -20,8 +20,8 @@ class Settings(BaseSettings):
     
     # GCP / Vertex AI
     google_cloud_project: str = "prj-cts-lab-vertex-sandbox"
-    google_cloud_region: str = "us-east1"
-    claude_model: str = "claude-sonnet-4@20250514"
+    google_cloud_region: str = "us-east5"  # Claude models available in us-east5
+    claude_model: str = "claude-sonnet-4"
     
     # Aliases for compatibility
     @property

@@ -31,10 +31,14 @@ router = APIRouter()
 @router.post("/start", response_model=StartResearchResponse)
 async def start_research(
     request: StartResearchRequest,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
-    """Start a new research session."""
+    """Start a new research session.
+    
+    NOTE: Research execution happens in the /stream endpoint, not here.
+    This just creates the session record. The frontend must connect to
+    /stream to actually trigger and run the research.
+    """
     logger.info(
         "Starting research",
         company=request.company_name,
@@ -42,7 +46,8 @@ async def start_research(
     )
 
     # Get or create team (placeholder - will use auth)
-    team_id = "default-team"
+    # Using a fixed UUID for default team until auth is implemented
+    team_id = "00000000-0000-0000-0000-000000000001"
 
     # Get or create company profile
     result = await db.execute(
@@ -84,20 +89,14 @@ async def start_research(
     db.add(session)
     await db.commit()
 
-    # Start research in background
-    async def run_research_task():
-        """Run research with a new database session."""
-        async with AsyncSessionLocal() as task_db:
-            service = ResearchService(task_db)
-            event_callback = await create_event_callback(session.id)
-            await service.run_research(session.id, event_callback)
-    
-    background_tasks.add_task(asyncio.create_task, run_research_task())
+    # NOTE: Research is NOT started here anymore.
+    # The /stream endpoint will trigger research when the client connects.
+    # This ensures Cloud Run keeps the instance alive during research.
 
     return StartResearchResponse(
-        session_id=session.id,
+        session_id=str(session.id),
         status=ResearchStatus.PENDING,
-        initiative_id=initiative.id,
+        initiative_id=str(initiative.id),
     )
 
 
@@ -116,8 +115,8 @@ async def get_research_session(
         raise HTTPException(status_code=404, detail="Session not found")
 
     return ResearchSessionResponse(
-        id=session.id,
-        initiative_id=session.initiative_id,
+        id=str(session.id),
+        initiative_id=str(session.initiative_id),
         triggered_by=session.triggered_by,
         status=ResearchStatus(session.status),
         follow_up_question=session.follow_up_question,
@@ -145,7 +144,7 @@ async def stop_research(
         raise HTTPException(status_code=400, detail="Session is not active")
 
     session.status = "stopped"
-    session.completed_at = datetime.now(timezone.utc)
+    session.completed_at = datetime.utcnow()
     await db.commit()
 
     return {"status": "stopped"}
@@ -170,7 +169,7 @@ async def stop_research_path(
         raise HTTPException(status_code=400, detail="Path is not active")
 
     path.status = "stopped"
-    path.completed_at = datetime.now(timezone.utc)
+    path.completed_at = datetime.utcnow()
     await db.commit()
 
     return {"status": "stopped"}
@@ -210,9 +209,9 @@ async def follow_up_research(
     # )
 
     return StartResearchResponse(
-        session_id=new_session.id,
+        session_id=str(new_session.id),
         status=ResearchStatus.PENDING,
-        initiative_id=original_session.initiative_id,
+        initiative_id=str(original_session.initiative_id),
     )
 
 
@@ -221,7 +220,11 @@ async def stream_research(
     session_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Stream research events via SSE."""
+    """Stream research events via SSE.
+    
+    This endpoint triggers research execution when the client connects.
+    Research runs within the SSE connection to keep Cloud Run instance alive.
+    """
     
     # Verify session exists
     result = await db.execute(
@@ -233,9 +236,11 @@ async def stream_research(
         raise HTTPException(status_code=404, detail="Session not found")
 
     async def event_generator() -> AsyncGenerator[str, None]:
-        """Generate SSE events."""
+        """Generate SSE events and run research."""
         # Subscribe to session events
         queue = await sse_manager.subscribe(session_id)
+        research_task = None
+        task_db = None
         
         try:
             # Send connected event
@@ -245,18 +250,42 @@ async def stream_research(
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })
             
-            # Stream events from queue
-            timeout = 300  # 5 minutes max
+            # Create a database session that stays open during research
+            task_db = AsyncSessionLocal()
+            
+            # Re-check session status
+            check_result = await task_db.execute(
+                select(tables.ResearchSession).where(tables.ResearchSession.id == session_id)
+            )
+            current_session = check_result.scalar_one_or_none()
+            
+            if current_session and current_session.status == "pending":
+                logger.info("Starting research from stream connection", session_id=session_id)
+                
+                # Run research in a task but keep streaming
+                service = ResearchService(task_db)
+                event_callback = await create_event_callback(session_id)
+                
+                # Create task but don't await it yet - we'll process events
+                research_task = asyncio.create_task(
+                    service.run_research(session_id, event_callback)
+                )
+            elif current_session:
+                logger.info("Session already started", session_id=session_id, status=current_session.status)
+            
+            # Stream events from queue while research runs
+            timeout = 600  # 10 minutes max for research
             start_time = asyncio.get_event_loop().time()
             
             while True:
                 elapsed = asyncio.get_event_loop().time() - start_time
                 if elapsed >= timeout:
+                    logger.warning("Research stream timeout", session_id=session_id)
                     break
                 
                 try:
                     # Wait for event with timeout for heartbeat
-                    event = await asyncio.wait_for(queue.get(), timeout=30)
+                    event = await asyncio.wait_for(queue.get(), timeout=15)
                     yield format_sse_message(event)
                     
                     # Check if research is complete
@@ -264,14 +293,38 @@ async def stream_research(
                         break
                         
                 except asyncio.TimeoutError:
-                    # Send heartbeat
+                    # Send heartbeat to keep connection alive
                     yield format_sse_message({
                         "type": "heartbeat",
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     })
+                    
+                    # Check if research task failed
+                    if research_task and research_task.done():
+                        exc = research_task.exception()
+                        if exc:
+                            logger.error("Research task failed", error=str(exc), session_id=session_id)
+                            yield format_sse_message({
+                                "type": "error",
+                                "message": str(exc),
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            })
+                            break
+        
+        except Exception as e:
+            logger.error("Stream error", error=str(e), session_id=session_id, exc_info=True)
+            yield format_sse_message({
+                "type": "error",
+                "message": str(e),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
         
         finally:
             await sse_manager.unsubscribe(session_id, queue)
+            if research_task and not research_task.done():
+                research_task.cancel()
+            if task_db:
+                await task_db.close()
 
     return StreamingResponse(
         event_generator(),

@@ -3,7 +3,7 @@
 import uuid
 import asyncio
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Callable, Optional
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -29,7 +29,7 @@ class ResearchService:
     async def run_research(
         self,
         session_id: str,
-        event_callback: callable | None = None,
+        event_callback: Optional[Callable] = None,
     ) -> None:
         """
         Run a complete research session.
@@ -65,7 +65,7 @@ class ResearchService:
         
         # Update session status
         session.status = "running"
-        session.started_at = datetime.now(timezone.utc)
+        session.started_at = datetime.utcnow()
         await self.db.commit()
         
         await self._emit_event(event_callback, "research_started", {
@@ -85,7 +85,7 @@ class ResearchService:
             
             # Mark complete
             session.status = "completed"
-            session.completed_at = datetime.now(timezone.utc)
+            session.completed_at = datetime.utcnow()
             await self.db.commit()
             
             await self._emit_event(event_callback, "research_complete", {
@@ -96,7 +96,7 @@ class ResearchService:
             logger.error("Research failed", session_id=session_id, error=str(e))
             session.status = "failed"
             session.error_message = str(e)
-            session.completed_at = datetime.now(timezone.utc)
+            session.completed_at = datetime.utcnow()
             await self.db.commit()
             
             await self._emit_event(event_callback, "error", {
@@ -109,7 +109,7 @@ class ResearchService:
         session: tables.ResearchSession,
         initiative: tables.Initiative,
         company: tables.CompanyProfile,
-        event_callback: callable | None,
+        event_callback: Optional[Callable],
     ) -> None:
         """Run the Prime → Research → Synthesis cycle."""
         
@@ -156,7 +156,7 @@ class ResearchService:
             # Check if we should stop
             if not plan.get("should_continue", True):
                 logger.info("Prime Agent decided to stop", cycle=cycle_number)
-                cycle.completed_at = datetime.now(timezone.utc)
+                cycle.completed_at = datetime.utcnow()
                 break
             
             # 2. Execute research paths
@@ -164,7 +164,7 @@ class ResearchService:
             
             if not research_paths:
                 logger.warning("No research paths planned", cycle=cycle_number)
-                cycle.completed_at = datetime.now(timezone.utc)
+                cycle.completed_at = datetime.utcnow()
                 break
             
             # Create path records and emit events
@@ -201,17 +201,18 @@ class ResearchService:
             for result in path_results:
                 path_id = result.get("path_id")
                 
-                # Update path record
+                # Update path record - filter by both assignment_id AND cycle to avoid duplicates
                 path_result = await self.db.execute(
                     select(tables.ResearchPath).where(
-                        tables.ResearchPath.assignment_id == path_id
+                        tables.ResearchPath.assignment_id == path_id,
+                        tables.ResearchPath.research_cycle_id == str(cycle.id),
                     )
                 )
                 path_record = path_result.scalar_one_or_none()
                 
                 if path_record:
                     path_record.status = "completed" if result["status"] == "completed" else "error"
-                    path_record.completed_at = datetime.now(timezone.utc)
+                    path_record.completed_at = datetime.utcnow()
                     path_record.tools_used = result.get("turns", 0)
                     path_record.reasoning = result.get("error")
                 
@@ -258,7 +259,7 @@ class ResearchService:
                 previous_assessment=confidence_assessment,
             )
             cycle.confidence_assessment = confidence_assessment
-            cycle.completed_at = datetime.now(timezone.utc)
+            cycle.completed_at = datetime.utcnow()
             
             # 5. Update dashboard content
             await self._update_dashboard(
@@ -298,7 +299,7 @@ class ResearchService:
         initiative: tables.Initiative,
         synthesis: dict,
         confidence: dict[str, str],
-        event_callback: callable | None,
+        event_callback: Optional[Callable],
     ) -> None:
         """Update or create dashboard content."""
         
@@ -346,7 +347,7 @@ class ResearchService:
         if dashboard:
             dashboard.content = content
             dashboard.portfolio_recommendations = recommendations
-            dashboard.updated_at = datetime.now(timezone.utc)
+            dashboard.updated_at = datetime.utcnow()
         else:
             dashboard = tables.DashboardContent(
                 id=str(uuid.uuid4()),
@@ -372,7 +373,7 @@ class ResearchService:
         self,
         company: tables.CompanyProfile,
         signal: str,
-        event_callback: callable | None,
+        event_callback: Optional[Callable],
     ) -> None:
         """Maybe create a new initiative from a tangential signal."""
         # Simple heuristic - create if signal is substantial
@@ -411,7 +412,7 @@ class ResearchService:
     
     async def _emit_event(
         self,
-        callback: callable | None,
+        callback: Optional[Callable],
         event_type: str,
         data: dict,
     ) -> None:

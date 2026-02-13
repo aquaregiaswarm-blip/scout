@@ -9,10 +9,10 @@ from app.config import get_settings
 logger = structlog.get_logger()
 settings = get_settings()
 
-# Model mapping
+# Model mapping - Claude models on Vertex AI (available in us-east5)
 CLAUDE_MODELS = {
-    "sonnet": "claude-sonnet-4@20250514",
-    "haiku": "claude-haiku-4@20250514",  # For synthesis/presentation
+    "sonnet": "claude-sonnet-4",
+    "haiku": "claude-3-haiku",  # Claude 3 Haiku is available
 }
 
 

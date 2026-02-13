@@ -23,8 +23,8 @@ router = APIRouter()
 def _initiative_to_response(initiative: tables.Initiative) -> InitiativeResponse:
     """Convert ORM initiative to response model."""
     return InitiativeResponse(
-        id=initiative.id,
-        company_profile_id=initiative.company_profile_id,
+        id=str(initiative.id),
+        company_profile_id=str(initiative.company_profile_id),
         name=initiative.name,
         description=initiative.description,
         discovered_by_agent=initiative.discovered_by_agent,
@@ -36,8 +36,8 @@ def _initiative_to_response(initiative: tables.Initiative) -> InitiativeResponse
 def _company_to_response(company: tables.CompanyProfile) -> CompanyProfileResponse:
     """Convert ORM company to response model."""
     return CompanyProfileResponse(
-        id=company.id,
-        team_id=company.team_id,
+        id=str(company.id),
+        team_id=str(company.team_id),
         company_name=company.company_name,
         industry=company.industry,
         created_at=company.created_at,
@@ -53,8 +53,8 @@ async def list_companies(
     db: AsyncSession = Depends(get_db),
 ):
     """List all companies for the current team."""
-    # Placeholder team_id - will use auth
-    team_id = "default-team"
+    # Placeholder team_id - will use auth when implemented
+    team_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
     # Get total count
     count_result = await db.execute(
@@ -153,13 +153,13 @@ async def refresh_initiative(
     )
     initiative = result.scalar_one_or_none()
 
-    if not initiative or initiative.company_profile_id != company_id:
+    if not initiative or str(initiative.company_profile_id) != company_id:
         raise HTTPException(status_code=404, detail="Initiative not found")
 
     # Create new research session
     session = tables.ResearchSession(
         id=str(uuid.uuid4()),
-        initiative_id=initiative.id,
+        initiative_id=str(initiative.id),
         triggered_by="refresh",
         status="pending",
     )
@@ -167,9 +167,9 @@ async def refresh_initiative(
     await db.commit()
 
     return StartResearchResponse(
-        session_id=session.id,
+        session_id=str(session.id),
         status=ResearchStatus.PENDING,
-        initiative_id=initiative.id,
+        initiative_id=str(initiative.id),
     )
 
 
@@ -190,8 +190,8 @@ async def get_initiative_dashboard(
         raise HTTPException(status_code=404, detail="Dashboard not found")
 
     return {
-        "id": dashboard.id,
-        "initiative_id": dashboard.initiative_id,
+        "id": str(dashboard.id),
+        "initiative_id": str(dashboard.initiative_id),
         "content": dashboard.content,
         "portfolio_recommendations": dashboard.portfolio_recommendations,
         "created_at": dashboard.created_at,

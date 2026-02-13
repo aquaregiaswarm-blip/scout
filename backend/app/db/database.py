@@ -38,15 +38,31 @@ class Base(DeclarativeBase):
 
 
 async def init_db() -> None:
-    """Initialize database connection."""
-    try:
-        async with engine.begin() as conn:
-            # Just verify connection, don't create tables (use Alembic)
-            await conn.run_sync(lambda _: None)
-        logger.info("Database connection established")
-    except Exception as e:
-        logger.error("Database connection failed", error=str(e))
-        raise
+    """Initialize database connection with retry for Cloud SQL proxy."""
+    import asyncio
+    
+    max_retries = 10
+    retry_delay = 2  # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            async with engine.begin() as conn:
+                # Just verify connection, don't create tables (use Alembic)
+                await conn.run_sync(lambda _: None)
+            logger.info("Database connection established", attempt=attempt + 1)
+            return
+        except Exception as e:
+            if attempt < max_retries - 1:
+                logger.warning(
+                    "Database connection failed, retrying...",
+                    attempt=attempt + 1,
+                    max_retries=max_retries,
+                    error=str(e)
+                )
+                await asyncio.sleep(retry_delay)
+            else:
+                logger.error("Database connection failed after all retries", error=str(e))
+                raise
 
 
 async def close_db() -> None:

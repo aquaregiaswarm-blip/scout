@@ -54,6 +54,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "https://scout.aquaregia.life",
+        "https://scout-frontend-841327020312.us-east1.run.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
